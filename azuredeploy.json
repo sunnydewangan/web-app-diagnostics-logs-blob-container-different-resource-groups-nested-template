@@ -1,0 +1,195 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2015-01-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "appResourceGroupName": {
+      "type": "string"
+    },
+    "storageResourceGroupName": {
+      "type": "string"
+    },
+    "storageAccountName": {
+      "type": "string",
+      "metadata": {
+        "description": "The name of Storage Account."
+      }
+    },
+    "blobContainerName": {
+      "type": "string",
+      "metadata": {
+        "description": "The name of Blob Container to store diagnostics logs from Web App."
+      }
+    },
+    "storageAccountSkuName": {
+      "type": "string",
+      "metadata": {
+        "description": "The name of the App Service Plan."
+      }
+    },
+    "storageAccountKind": {
+      "type": "string",
+      "metadata": {
+        "description": "The name of the Storage Account Type."
+      }
+    },
+    "appServicePlanName": {
+      "type": "string",
+      "metadata": {
+        "description": "The name of the App Service Plan."
+      }
+    },
+    "appServicePlanSkuName": {
+      "type": "string",
+      "metadata": {
+        "description": "The SKU name of the App Serivce Plan."
+      }
+    },
+    "webAppName": {
+      "type": "string",
+      "metadata": {
+        "description": "The name of the Web App."
+      }
+    },
+    "diagnosticsLogsLevel": {
+      "type": "string",
+      "allowedValues": [
+        "Verbose",
+        "Information",
+        "Warning",
+        "Error"
+      ],
+      "metadata": {
+        "description": "The degree of severity for diagnostics logs."
+      }
+    },
+    "diagnosticsLogsRetentionInDays": {
+      "type": "int",
+      "metadata": {
+        "description": "Number of days for which the diagnostics logs will be retained."
+      }
+    },
+    "location": {
+      "type": "string",
+      "metadata": {
+        "description": "Location for all resources."
+      }
+    }
+  },
+  "variables": {
+    "blobContainerName": "[toLower(parameters('blobContainerName'))]",
+    "listAccountSasRequestContent": {
+      "signedServices": "bfqt",
+      "signedPermission": "rwdlacup",
+      "signedStart": "2018-10-01T00:00:00Z",
+      "signedExpiry": "2218-10-30T00:00:00Z",
+      "signedResourceTypes": "sco"
+    }
+  },
+  "resources": [
+    {
+      "apiVersion": "2018-02-01",
+      "type": "Microsoft.Storage/storageAccounts",
+      "name": "[parameters('storageAccountName')]",
+      "location": "[parameters('location')]",
+      "sku": {
+        "name": "[parameters('storageAccountSkuName')]"
+      },
+      "kind": "[parameters('storageAccountKind')]",
+      "resources": [
+        {
+          "name": "[concat('default/', variables('blobContainerName'))]",
+          "type": "blobServices/containers",
+          "apiVersion": "2018-02-01",
+          "dependsOn": [
+            "[concat('Microsoft.Storage/storageAccounts/', parameters('storageAccountName'))]"
+          ],
+          "properties": {
+            "publicAccess": "Blob"
+          }
+        }
+      ]
+    },
+    {
+      "apiVersion": "2018-02-01",
+      "name": "app-template",
+      "type": "Microsoft.Resources/deployments",
+      "resourceGroup": "[parameters('appResourceGroupName')]",
+      "dependsOn": [
+        "[concat('Microsoft.Storage/storageAccounts/', parameters('storageAccountName'))]"
+      ],
+      "properties": {
+        "mode": "Incremental",
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2015-01-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "parameters": {},
+          "variables": {},
+          "resources": [
+            {
+              "apiVersion": "2018-02-01",
+              "type": "Microsoft.Web/serverfarms",
+              "name": "[parameters('appServicePlanName')]",
+              "location": "[parameters('location')]",
+              "sku": {
+                "Name": "[parameters('appServicePlanSkuName')]"
+              }
+            },
+            {
+              "apiVersion": "2018-02-01",
+              "type": "Microsoft.Web/sites",
+              "name": "[parameters('webAppName')]",
+              "location": "[parameters('location')]",
+              "dependsOn": [
+                "[concat('Microsoft.Web/serverfarms/', parameters('appServicePlanName'))]",
+              ],
+              "properties": {
+                "name": "[parameters('webAppName')]",
+                "serverFarmId": "[concat('/subscriptions/', subscription().id,'/resourcegroups/', parameters('appResourceGroupName'), '/providers/Microsoft.Web/serverfarms/', parameters('appServicePlanName'))]"
+              },
+              "resources": [
+                {
+                  "apiVersion": "2018-02-01",
+                  "type": "config",
+                  "name": "logs",
+                  "dependsOn": [
+                    "[concat('Microsoft.Web/sites/', parameters('webAppName'))]"
+                  ],
+                  "properties": {
+                    "applicationLogs": {
+                      "fileSystem": {
+                        "level": "Off" //Set it to 'Verbose', 'Information', 'Warning' or 'Error' if you want to enable the application logs for the file system
+                      },
+                      "azureBlobStorage": {
+                        "level": "[parameters('diagnosticsLogsLevel')]",
+                        "sasUrl": "[concat(reference(concat('Microsoft.Storage/storageAccounts/', parameters('storageAccountName'))).primaryEndpoints.blob , variables('blobContainerName'), '?', listAccountSas(resourceId(parameters('storageResourceGroupName'), 'Microsoft.Storage/storageAccounts', parameters('storageAccountName')), '2018-02-01', variables('listAccountSasRequestContent')).accountSasToken)]",
+                        "retentionInDays": "[parameters('diagnosticsLogsRetentionInDays')]"
+                      }
+                    },
+                    "httpLogs": {
+                      "fileSystem": {
+                        "retentionInMb": 35,
+                        "retentionInDays": 10,
+                        "enabled": false //Set it to true if you want to store httpLogs into the file system
+                      },
+                      "azureBlobStorage": {
+                        "sasUrl": "[concat(reference(concat('Microsoft.Storage/storageAccounts/', parameters('storageAccountName'))).primaryEndpoints.blob , variables('blobContainerName'), '?', listAccountSas(resourceId(parameters('storageResourceGroupName'), 'Microsoft.Storage/storageAccounts', parameters('storageAccountName')), '2018-02-01', variables('listAccountSasRequestContent')).accountSasToken)]",
+                        "retentionInDays": "[parameters('diagnosticsLogsRetentionInDays')]",
+                        "enabled": true
+                      }
+                    },
+                    "failedRequestsTracing": {
+                      "enabled": true //Set it to false if you don't want to enable FREB logs
+                    },
+                    "detailedErrorMessages": {
+                      "enabled": true //Set it to false if you don't want to enable detailed error logs
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      }
+    }
+  ]
+}
